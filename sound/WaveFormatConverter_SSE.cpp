@@ -11,6 +11,8 @@
 //! @brief Waveフォーマットコンバータのコア関数
 //---------------------------------------------------------------------------
 
+#include <intrin.h>
+
 #include "tjsCommHead.h"
 #include "MathAlgorithms.h"
 #if defined(_M_IX86)||defined(_M_X64)
