@@ -1,27 +1,45 @@
+SHELL = /bin/bash
+
 ifeq ($(VCPKG_ROOT),)
 $(error Variables VCPKG_ROOT not set correctly.)
 endif
 
-ifeq ($(shell type cygpath > /dev/null && echo true),true)
+ifeq ($(shell type cygpath >& /dev/null && echo true),true)
 FIXPATH = cygpath -ma
 else
 FIXPATH = realpath
 endif
 
-PRESET?=x64-windows
-BUILD_TYPE?=Release
-
-ifeq ($(DATAPATH),)
-DATAPATH=data
+# Detect OS and set default PRESET accordingly
+ifeq ($(OS),Windows_NT)
+	PRESET?=x64-windows
+else
+	UNAME_S := $(shell uname -s)
+	UNAME_M := $(shell uname -m)
+	ifeq ($(UNAME_S),Linux)
+		ifeq ($(UNAME_M),aarch64)
+			PRESET?=arm64-linux
+		else
+			PRESET?=x64-linux
+		endif
+	else ifeq ($(UNAME_S),Darwin)
+		ifeq ($(UNAME_M),arm64)
+			PRESET?=arm64-osx
+		else
+			PRESET?=x64-osx
+		endif
+	else
+		PRESET?=x64-windows
+	endif
 endif
 
-DATAPATH_ABS=$(shell $(FIXPATH) "$(DATAPATH)")
+BUILD_TYPE?=Release
+CMAKEOPT?=
+INSTALL_PREFIX?=install
 
 BUILD_PATH=$(shell cmake --preset $(PRESET) -N | grep BUILD_DIR | sed 's/.*BUILD_DIR="\(.*\)"/\1/')
 
-INSTALL_PREFIX?=install
-
-.PHONY: build  prebuild
+.PHONY: prebuild build clean install run test
 
 all: build
 
@@ -31,16 +49,29 @@ prebuild:
 	cmake --preset $(PRESET) ${CMAKEOPT}
 # ビルド実行
 build:
-	cmake --build --preset $(PRESET) --config $(BUILD_TYPE)
-
-install:
-	cmake --install --preset $(PRESET) --config $(BUILD_TYPE) --prefix $(INSTALL_PREFIX)
+	cmake --build $(BUILD_PATH) --config $(BUILD_TYPE)
 
 clean:
-	cmake --build --preset $(PRESET) --config $(BUILD_TYPE) --target clean
+	cmake --build $(BUILD_PATH) --config $(BUILD_TYPE) --target clean
+
+install:
+	cmake --install $(BUILD_PATH) --config $(BUILD_TYPE) --prefix $(INSTALL_PREFIX)
+
+# SIMD parity テスト のビルド + 実行
+# simd_parity: 画像処理 SIMD (SSE2/AVX2/NEON) を C リファレンスと byte-exact
+#              (一部 tolerance) で比較
+# sound_parity: sound SIMD (SSE/NEON) を C リファレンスと tolerance 比較
+# どちらも SDL3 / OpenGL / vcpkg 非依存のスタンドアロンテスト。
+test:
+	cmake --build $(BUILD_PATH) --config $(BUILD_TYPE) --target krkrz_simd_parity_test
+	cmake --build $(BUILD_PATH) --config $(BUILD_TYPE) --target krkrz_sound_parity_test
+	ctest --test-dir $(BUILD_PATH) -C $(BUILD_TYPE) -R parity --output-on-failure
 
 # WIN版用ルール
-ifeq (windows,$(findstring windows,$(PRESET)))
+ifeq ($(findstring windows,$(PRESET)),windows)
+
+DATAPATH?=data
+DATAPATH_ABS=$(shell $(FIXPATH) "$(DATAPATH)")
 
 ifeq (x86,$(findstring x86,$(PRESET)))
 PLUGINS_SRC_DIR=plugin

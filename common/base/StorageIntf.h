@@ -14,6 +14,7 @@
 #include "tjsNative.h"
 #include "tjsHashSearch.h"
 #include <vector>
+#include <memory>
 
 //---------------------------------------------------------------------------
 // archive delimiter
@@ -135,6 +136,20 @@ public:
 		// check wether given name is easily accessible from local OS filesystem.
 		// if true, returns local OS native name. otherwise returns an empty string.
 };
+
+class iTVPStorageMedia2 : public iTVPStorageMedia
+{
+public:
+	virtual bool TJS_INTF_METHOD Remove(const ttstr & name) = 0;
+	    // remove file or directory. "name" is normalized but does not contain media name.
+
+	virtual bool TJS_INTF_METHOD Move(const ttstr & from, const ttstr & to) = 0;
+		// move file or directory. "from" and "to" are normalized but do not contain media name.		
+
+	virtual tjs_uint64 TJS_INTF_METHOD  LastModifiedFileTime(const ttstr &name) = 0;	
+		// returns last modified file time in 100-nanosecond intervals since January 1, 1601 (UTC).
+};
+
 //---------------------------------------------------------------------------
 /*]*/
 
@@ -159,7 +174,10 @@ void TVPPreNormalizeStorageName(ttstr &name);
 
 iTVPStorageMedia * TVPCreateFileMedia();
 	// create basic default "file:" storage media
-/*
+
+
+
+	/*
 extern void TVPPreNormalizeStorageName(ttstr &name);
 
 extern iTJSBinaryStream * TVPOpenStream(const ttstr & name, tjs_uint32 flags);
@@ -170,7 +188,6 @@ extern iTJSBinaryStream * TVPOpenStream(const ttstr & name, tjs_uint32 flags);
 extern bool TVPCheckExistentStorage(const ttstr &name);
 	// check file existence
 
-extern void TVPGetStorageListAt(const ttstr &name, std::vector<ttstr> & list);
 
 extern ttstr TVPGetMediaCurrent(const ttstr & name);
 extern void TVPSetMediaCurrent(const ttstr & name, const ttstr & dir);
@@ -193,20 +210,35 @@ bool TVPCreateFolders(const ttstr &folder);
 	// create folder along with the argument recursively (like mkdir -p).
 	// 'folder' must be a local native name.
 
+bool TVPMoveFile(const ttstr &oldname, const ttstr &newname);
+	// rename file ( "oldname" and "newname" are local *native* names )
+	// this must not throw an exception ( return false if error )
+
+extern void TVPGetStorageListAt(const ttstr &name, iTVPStorageLister *lister);
+	// list files at given place
+
+extern tjs_uint64 TVPLastModifiedFileTime(const ttstr &name);
+	// returns last modified file time in 100-nanosecond intervals since January 1, 1601 (UTC).
+	// "name" is a local *native* name. if the file does not exist, return 0.
+
 //---------------------------------------------------------------------------
-
-
-
-
 
 //---------------------------------------------------------------------------
 // implementation in this unit
 //---------------------------------------------------------------------------
 TJS_EXP_FUNC_DEF(void, TVPRegisterStorageMedia, (iTVPStorageMedia *media));
 	// register storage media
+TJS_EXP_FUNC_DEF(void, TVPRegisterStorageMedia, (iTVPStorageMedia2 *media));
+	// register storage media
 TJS_EXP_FUNC_DEF(void, TVPUnregisterStorageMedia, (iTVPStorageMedia *media));
 	// remove storage media
 
+TJS_EXP_FUNC_DEF(bool, TVPRemoveStorage, (const ttstr &name));
+	// remove file path
+TJS_EXP_FUNC_DEF(bool, TVPMoveStorage, (const ttstr &from, const ttstr &to));
+	// move file path
+TJS_EXP_FUNC_DEF(tjs_uint64, TVPLastModifiedFileTimeStorage, (const ttstr &name));
+	// returns last modified file time in 100-nanosecond intervals since January 1, 1601 (UTC).	
 
 TJS_EXP_FUNC_DEF(iTJSBinaryStream *, TVPCreateStream, (const ttstr & name, tjs_uint32 flags = 0));
 	// open "name" and return iTJSBinaryStream instance.
@@ -264,13 +296,17 @@ TJS_EXP_FUNC_DEF(bool, TVPIsExistentStorage, (const ttstr &name));
 TJS_EXP_FUNC_DEF(void, TVPClearStorageCaches, ());
 	// clear all internal storage related caches.
 
-extern tjs_uint TVPSegmentCacheLimit; // XP3 segment cache limit, in bytes.
+	extern tjs_uint TVPSegmentCacheLimit; // XP3 segment cache limit, in bytes.
 
 //---------------------------------------------------------------------------
 
+std::shared_ptr<uint8_t> TVPReadStream(const tjs_char *name, tjs_uint64 *flen=0);
+// read stream and return a buffer. the buffer is \0 terminated.
+	// if size is not null, the size of the buffer is returned to it.
 
-
-
+std::vector<std::string> *TVPReadLines(const tjs_char *name);
+// read lines from file and return a vector of string. the buffer is \0 terminated.
+	// if size is not null, the size of the buffer is returned to it.
 
 //---------------------------------------------------------------------------
 // tTJSNC_Storages : TJS Storages class
@@ -290,6 +326,13 @@ protected:
 extern tTJSNativeClass * TVPCreateNativeClass_Storages();
 //---------------------------------------------------------------------------
 
+// 指定の拡張子はファイルロード時にオンメモリにする
+void TVPAddCacheTargetExtension(const ttstr &ext);
+void TVPRemoveCacheTargetExtension(const ttstr &ext);
+bool TVPIsCacheTargetExtension(const ttstr &ext);
+void TVPClearCacheTargetExtensions();
+
+bool TVPIsCacheTargetFile(const ttstr &name);
 
 
 #endif

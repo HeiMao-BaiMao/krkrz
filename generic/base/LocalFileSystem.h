@@ -10,8 +10,7 @@ class iTVPLocalFileSystem {
 public:
 	virtual bool NormalizeStorageName(tjs_string &name) = 0;
 	virtual void GetLocallyAccessibleName(tjs_string &name) = 0;
-	virtual void GetListAt(const tjs_char *name, std::function<void(const tjs_char *)> lister) = 0;
-	virtual void GetListAtWithDir(const tjs_char *name, std::function<void(const tjs_char *, bool isDir)> lister) = 0;
+	virtual void GetListAt(const tjs_char *name, std::function<void(const tjs_char *, bool isDir)> lister, bool withDir) = 0;
 	virtual bool RemoveDirectory(const tjs_char *path) = 0;
 	virtual bool MakeDirectory(const tjs_char *path) = 0;
 	virtual bool ExistentFile(const tjs_char *path) = 0;
@@ -21,6 +20,7 @@ public:
 	virtual iTJSBinaryStream *OpenStream(const tjs_char *path, const tjs_uint32 flags) = 0;
 	virtual void CommitSavedata() = 0;
 	virtual void RollbackSavedata() = 0;
+	virtual tjs_uint64 LastModifiedFileTime(const tjs_char *path) = 0;	
 };
 
 extern iTVPLocalFileSystem* TVPCreateLocalFileSystem();

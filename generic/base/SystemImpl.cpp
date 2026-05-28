@@ -25,7 +25,7 @@
 
 #include "Application.h"
 //#include "CompatibleNativeFuncs.h"
-#include "DebugIntf.h"
+#include "LogIntf.h"
 #include "CharacterSet.h"
 
 #if !defined(_WIN32)
@@ -65,8 +65,8 @@ bool TVPGetAsyncKeyState(tjs_uint keycode, bool getcurrent)
 	//}
 
 	bool ret = Application->GetAsyncKeyState(keycode, getcurrent);
-	//Application->DPRINTF(TJS_W("keystate:%02x ret:%d"), keycode, ret?1:0);
-
+	//int result = ret ? 1 : 0;
+	//TVPLOG_DEBUG("keystate:{:08x} ret:{}", keycode, result);
 	return ret;
 }
 //---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ bool TVPGetAsyncKeyState(tjs_uint keycode, bool getcurrent)
 //---------------------------------------------------------------------------
 ttstr TVPGetPlatformName()
 {
-	static ttstr platform(TJS_W("Generic"));
+	ttstr platform = Application->getPlatformName().c_str();
 	return platform;
 }
 //---------------------------------------------------------------------------
@@ -87,12 +87,8 @@ ttstr TVPGetPlatformName()
 //---------------------------------------------------------------------------
 ttstr TVPGetOSName()
 {
-	const tjs_char *osname = TJS_W("Generic");
-
-	tjs_char buf[256];
-	TJS_snprintf(buf, sizeof(buf)/sizeof(tjs_char), TJS_W("%ls"), osname);
-
-	return ttstr(buf);
+	ttstr osName = Application->getOsName().c_str();
+	return osName;
 }
 //---------------------------------------------------------------------------
 
@@ -101,8 +97,12 @@ ttstr TVPGetOSName()
 //---------------------------------------------------------------------------
 tjs_int TVPGetOSBits()
 {
-	// XXX 要実装
-	return 32;
+	// Platform-specific OS bits detection
+	#if defined(__aarch64__) || defined(_M_ARM64) || defined(TJS_64BIT_OS)
+		return 64;
+	#else
+		return 32;
+	#endif
 }
 //---------------------------------------------------------------------------
 
@@ -119,10 +119,15 @@ bool TVPShellExecute(const ttstr &target, const ttstr &param)
 //---------------------------------------------------------------------------
 // TVPCreateAppLock
 //---------------------------------------------------------------------------
+extern int GetSystemSecurityOption(const char *name);
 bool TVPCreateAppLock(const ttstr &lockname)
 {
-	// XXX 要実装
-	return true;
+	// [CUSTOM-MODIFIED] System.createAppLock(...) always return true security-option
+	static const int nolock = GetSystemSecurityOption("disableapplock");
+	if (nolock > 0) return true;
+
+	// lock application using mutex
+	return Application->CreateAppLock(lockname.AsStdString());
 }
 //---------------------------------------------------------------------------
 

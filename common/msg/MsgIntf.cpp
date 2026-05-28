@@ -9,6 +9,7 @@
 // Definition of Messages and Message Related Utilities
 //---------------------------------------------------------------------------
 #include "tjsCommHead.h"
+#include "tjsString.h"
 
 #include "tjsError.h"
 //---------------------------------------------------------------------------
@@ -17,7 +18,6 @@
 
 #include "MsgIntf.h"
 #include "DebugIntf.h"
-#include "ApplicationSpecialPath.h"
 
 //---------------------------------------------------------------------------
 // TVPFormatMessage
@@ -146,15 +146,7 @@ tjs_int TVPVersionMinor;
 tjs_int TVPVersionRelease;
 tjs_int TVPVersionBuild;
 //---------------------------------------------------------------------------
-/*
-#ifdef _WIN32
-#define WIDEN2(x) L ## x
-#define WIDEN(x) WIDEN2(x)
-#else
-#define WIDEN2(x) u ## x
-#define WIDEN(x) WIDEN2(x)
-#endif
-*/
+
 const tjs_char* TVPCompileDate = WIDEN(__DATE__);
 const tjs_char* TVPCompileTime = WIDEN(__TIME__);
 
@@ -204,8 +196,9 @@ ttstr TVPGetVersionInformation(void)
 		TJSVersionMajor, TJSVersionMinor, TJSVersionRelease);
 
 	ttstr version = TVPFormatMessage(TVPVersionInformation, verstr, tjsverstr);
-	tjs_string str = ApplicationSpecialPath::ReplaceStringAll( version.AsStdString(), tjs_string(TJS_W("%DATE%")), tjs_string(TVPCompileDate) );
-	str = ApplicationSpecialPath::ReplaceStringAll( str, tjs_string(TJS_W("%TIME%")), tjs_string(TVPCompileTime) );
+	tjs_string str = version.AsStdString();
+	str = string_replace_all( str, tjs_string_view(TJS_W("%DATE%")), tjs_string_view(TVPCompileDate) );
+	str = string_replace_all( str, tjs_string_view(TJS_W("%TIME%")), tjs_string_view(TVPCompileTime) );
 	return ttstr(str);
 }
 //---------------------------------------------------------------------------

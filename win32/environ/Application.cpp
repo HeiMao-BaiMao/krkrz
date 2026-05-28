@@ -18,10 +18,12 @@
 #include "tjsDebug.h"
 
 #include "Application.h"
+#include "WinConsole.h"
 #include "FilePathUtil.h"
 #include "SysInitIntf.h"
 #include "SysInitImpl.h"
 #include "DebugIntf.h"
+#include "LogIntf.h"
 #include "MsgImpl.h"
 #include "ScriptMgnIntf.h"
 #include "tjsError.h"
@@ -36,6 +38,10 @@
 #include "SystemImpl.h"
 #include "WaveImpl.h"
 #include "GraphicsLoadThread.h"
+#ifdef KRKRZ_USE_REPL
+#include "REPL.h"
+#include "tjsDebuggerCore.h"
+#endif
 #include "CharacterSet.h"
 #include "StorageCache.h"
 
@@ -88,7 +94,7 @@ static MemoryLeaksDebugBreakPoint gMemoryLeaksDebugBreakPoint;
 
 tjs_string ExePath() {
 	tjs_char szFull[_MAX_PATH];
-	::GetModuleFileName(NULL, szFull, sizeof(szFull) / sizeof(tjs_char));
+	::GetModuleFileName(NULL, (wchar_t*)szFull, sizeof(szFull) / sizeof(tjs_char));
 	return tjs_string(szFull);
 }
 
@@ -208,6 +214,8 @@ void AcceleratorKey::DelKey( WORD id ) {
 	keys_ = table;
 }
 
+#include "LogIntf.h"
+
 int APIENTRY wWinMain( _In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPWSTR lpCmdLine, _In_ int nCmdShow ) {
 	try {
 		CheckMemoryLeaksStart();
@@ -216,15 +224,51 @@ int APIENTRY wWinMain( _In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstanc
 		// XP より後で使えるAPIを動的に読み込んで互換性を取る
 		TVPInitCompatibleNativeFunctions();
 
+		// ログレベル設定
+#ifdef MASTER
+		TVPLogInit(TVPLOG_LEVEL_WARNING);
+#else
+		{
+#ifdef NDEBUG
+    	    TVPLogLevel logLevel = TVPLOG_LEVEL_INFO;
+#else
+	        TVPLogLevel logLevel = TVPLOG_LEVEL_DEBUG;
+#endif
+			const char* logLevelArg = "-loglevel=";
+			for (int i = 1; i < __argc; i++) {
+				char argStr[256];
+				WideCharToMultiByte(CP_UTF8, 0, __wargv[i], -1, argStr, sizeof(argStr), NULL, NULL);
+				if (strncmp(argStr, logLevelArg, strlen(logLevelArg)) == 0) {
+					const char* levelStr = argStr + strlen(logLevelArg);
+					if (strcmp(levelStr, "ERROR") == 0) {
+						logLevel = TVPLOG_LEVEL_ERROR;
+					} else if (strcmp(levelStr, "WARNING") == 0) {
+						logLevel = TVPLOG_LEVEL_WARNING;
+					} else if (strcmp(levelStr, "INFO") == 0) {
+						logLevel = TVPLOG_LEVEL_INFO;
+					} else if (strcmp(levelStr, "DEBUG") == 0) {
+						logLevel = TVPLOG_LEVEL_DEBUG;
+					} else if (strcmp(levelStr, "VERBOSE") == 0) {
+						logLevel = TVPLOG_LEVEL_VERBOSE;
+					}
+					break;
+				}
+			}			
+			TVPLogInit(logLevel);
+		}
+#endif
+
+		TVPStartup();
+
 		// メッセージ文字列をリソースから読込み
 		TVPLoadMessage();
 
 		_argc = __argc;
-		_wargv = __wargv;
+		_wargv = (tjs_char**)__wargv;
 
 		MouseCursor::Initialize();
 		Application = new tTVPApplication();
-		Application->StartApplication( __argc, __wargv );
+		Application->StartApplication( __argc, (tjs_char**)__wargv );
 	
 		// delete application and exit forcely
 		// this prevents ugly exception message on exit
@@ -264,17 +308,17 @@ struct SEHException {
 
 int TVPWriteHWEDumpFile( EXCEPTION_POINTERS* pExceptionPointers ) {
 	BOOL bMiniDumpSuccessful;
-	tjs_char szPath[MAX_PATH]; 
-	tjs_char szFileName[MAX_PATH]; 
+	wchar_t szPath[MAX_PATH]; 
+	wchar_t szFileName[MAX_PATH]; 
 	const tjs_char* szAppName = TVPKirikiri;
 	const tjs_char* szVersion = TVPGetVersionString().c_str();
 
 	TVPEnsureDataPathDirectory();
-	TJS_strcpy(szPath, TVPNativeDataPath.c_str());
+	TJS_strcpy((tjs_char*)szPath, TVPNativeDataPath.c_str());
 
 	SYSTEMTIME stLocalTime;
 	::GetLocalTime( &stLocalTime );
-	StringCchPrintf( szFileName, MAX_PATH, TJS_W("%s%s%s-%04d%02d%02d-%02d%02d%02d-%ld-%ld.dmp"),
+	StringCchPrintf(szFileName, MAX_PATH, L"%s%s%s-%04d%02d%02d-%02d%02d%02d-%ld-%ld.dmp",
 				szPath, szAppName, szVersion,
 				stLocalTime.wYear, stLocalTime.wMonth, stLocalTime.wDay,
 				stLocalTime.wHour, stLocalTime.wMinute, stLocalTime.wSecond,
@@ -335,7 +379,7 @@ const tjs_char* SECodeToMessage( unsigned int code ) {
 bool tTVPApplication::StartApplication( int argc, tjs_char* argv[] ) {
 	_set_se_translator(se_translator_function);
 
-	::SetDllDirectory( PluginPath().c_str() );
+	::SetDllDirectory( (const wchar_t*)PluginPath().c_str() );
 
 	ArgC = argc;
 	ArgV = argv;
@@ -386,9 +430,26 @@ bool tTVPApplication::StartApplication( int argc, tjs_char* argv[] ) {
 		image_load_thread_->StartThread();
 		file_cache_thread_->StartThread();
 
+#ifdef KRKRZ_ENABLE_DAP
+		// マルチフレーム stack trace のため、StackTracer をスクリプト起動より
+		// 前にセットアップしておく必要がある。
+		TVPCreateDAP();
+#endif
+
 		if(TVPProjectDirSelected) TVPInitializeStartupScript();
 
+#ifdef KRKRZ_USE_REPL
+		TVPCreateREPL();
+#endif
+
 		Run();
+
+#ifdef KRKRZ_USE_REPL
+		TVPDestroyREPL();
+#endif
+#ifdef KRKRZ_ENABLE_DAP
+		TVPDestroyDAP();
+#endif
 
 		try {
 			// image_load_thread_->ExitRequest();
@@ -426,7 +487,8 @@ bool tTVPApplication::StartApplication( int argc, tjs_char* argv[] ) {
 		PEXCEPTION_RECORD rec = e.ExceptionPointers->ExceptionRecord;
 		tjs_string text(SECodeToMessage(e.Code));
 		ttstr result = TJSGetStackTraceString( 10 );
-		PrintConsole( result.c_str(), result.length(), true );
+
+		TVPLOG_CRITICAL("{}", result);
 
 		TVPDumpHWException();
 		ShowException( text.c_str() );
@@ -466,80 +528,30 @@ tjs_string tTVPApplication::PluginPath()
 void tTVPApplication::CheckConsole() {
 #ifdef TVP_LOG_TO_COMMANDLINE_CONSOLE
 	if( has_map_report_process_ ) return; // 書き出し用子プロセスして起動されていた時はコンソール接続しない
-	HANDLE hin  = ::GetStdHandle(STD_INPUT_HANDLE);
-	HANDLE hout = ::GetStdHandle(STD_OUTPUT_HANDLE);
-	HANDLE herr = ::GetStdHandle(STD_ERROR_HANDLE);
+	// 元のコンソールタイトルを保存 (CloseConsole で戻すため)
+	wchar_t console[256] = {0};
+	::GetConsoleTitle( console, 256 );
+	console_title_ = tjs_string( (tjs_char*)console );
 
-	DWORD curProcId = ::GetCurrentProcessId();
-	DWORD processList[256];
-	DWORD count = ::GetConsoleProcessList( processList, 256 );
-	bool thisProcHasConsole = false;
-	for( DWORD i = 0; i < count; i++ ) {
-		if( processList[i] == curProcId ) {
-			thisProcHasConsole = true;
-			break;
-		}
-	}
-	bool attachedConsole = true;
-	if( thisProcHasConsole == false ) {
-		attachedConsole = ::AttachConsole(ATTACH_PARENT_PROCESS) != 0;
-	}
-
-	if( (hin==0||hout==0||herr==0) && attachedConsole ) {
-		tjs_char console[256];
-		::GetConsoleTitle( console, 256 );
-		console_title_ = tjs_string( console );
-		// 元のハンドルを再割り当て
-		if (hin)  ::SetStdHandle(STD_INPUT_HANDLE, hin);
-		if (hout) ::SetStdHandle(STD_OUTPUT_HANDLE, hout);
-		if (herr) ::SetStdHandle(STD_ERROR_HANDLE, herr);
-	}
-	is_attach_console_ = attachedConsole;
+	is_attach_console_ = TVPAttachWindowsConsole();
 #endif
 }
 
-void tTVPApplication::CloseConsole() {
-	tjs_char buf[100];
-	DWORD len = TJS_snprintf(buf, 100, TVPExitCode, TVPTerminateCode);
-	PrintConsole(buf, len);
+void tTVPApplication::CloseConsole()
+{
+	TVPLOG_INFO("CloseConsole:{}", TVPTerminateCode);
 	if( is_attach_console_ ) {
-		::SetConsoleTitle( console_title_.c_str() );
-		::FreeConsole();
+		::SetConsoleTitle( (const wchar_t*) console_title_.c_str() );
+		TVPDetachWindowsConsole();
 		is_attach_console_ = false;
 	}
 }
 
-void tTVPApplication::PrintConsole( const tjs_char* mes, unsigned long len, bool iserror ) {
-	HANDLE hStdOutput = ::GetStdHandle(iserror ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE);
-	if (hStdOutput > 0) {
-		DWORD mode;
-		if (GetConsoleMode(hStdOutput, &mode)) {
-			// 実コンソール
-			DWORD wlen;
-			::WriteConsoleW( hStdOutput, mes, len, &wlen, NULL );
-			::WriteConsoleW( hStdOutput, TJS_W("\n"), 1, &wlen, NULL );
-		} else {
-			// その他のハンドル, UTF-8で出力
-			tjs_int u8len = TVPWideCharToUtf8String( mes, len, nullptr );
-			if( console_cache_.size() < u8len ) {
-				console_cache_.resize(u8len);
-			}
-			TVPWideCharToUtf8String( mes, len, &(console_cache_[0]) );
-			DWORD wlen;
-			::WriteFile( hStdOutput, &(console_cache_[0]), u8len, &wlen, NULL );
-			::WriteFile( hStdOutput, "\n", 1, &wlen, NULL );
-		}
-	}
-#ifdef _DEBUG
-	::OutputDebugString( mes );
-	::OutputDebugString( TJS_W("\n") );
-#endif
-}
 HWND tTVPApplication::GetHandle() {
 	if( windows_list_.size() > 0 ) {
 		return windows_list_[0]->GetHandle();
 	} else {
-		return INVALID_HANDLE_VALUE;
+		return (HWND)INVALID_HANDLE_VALUE;
 	}
 }
 void tTVPApplication::Minimize() {
@@ -566,7 +578,10 @@ void tTVPApplication::BringToFront() {
 	}
 }
 void tTVPApplication::ShowException( const tjs_char* e ) {
-	::MessageBox( NULL, e, TVPFatalError, MB_OK );
+	std::string utf8str;
+	TVPUtf16ToUtf8(utf8str, e);
+	TVPLOG_CRITICAL("{}", utf8str);
+	::MessageBox( NULL, (const wchar_t*)e, L"FatalError", MB_OK );
 }
 void tTVPApplication::Run() {
 	TVPTerminateCode = 0;
@@ -603,6 +618,13 @@ void tTVPApplication::ProcessMessages() {
 	while(ProcessMessage(msg));
 }
 void tTVPApplication::HandleMessage() {
+#ifdef KRKRZ_USE_REPL
+	// REPL ワーカーからのリクエストを 1 件ドレイン
+	TVPDrainREPL();
+#endif
+#ifdef KRKRZ_ENABLE_DAP
+	TVPDrainDAP();
+#endif
 	MSG msg = {0};
 	if( !ProcessMessage(msg) ) {
 		HandleIdle(msg);
@@ -621,14 +643,14 @@ void tTVPApplication::SetTitle( const tjs_string& caption ) {
 		windows_list_[0]->SetCaption( caption );
 	}
 	if( is_attach_console_ ) {
-		::SetConsoleTitle( caption.c_str() );
+		::SetConsoleTitle( (const wchar_t*)caption.c_str() );
 	}
 }
 HWND tTVPApplication::GetMainWindowHandle() const {
 	if( windows_list_.size() > 0 ) {
 		return windows_list_[0]->GetHandle();
 	}
-	return INVALID_HANDLE_VALUE;
+	return (HWND)INVALID_HANDLE_VALUE;
 }
 
 void tTVPApplication::RemoveWindow( TTVPWindowForm* win ) {
@@ -819,7 +841,7 @@ bool tTVPApplication::CacheIsLoading(bool fast) const
 
 std::vector<std::string>* LoadLinesFromFile( const tjs_string& path ) {
 	FILE *fp = NULL;
-	_wfopen_s( &fp, path.c_str(), TJS_W("r"));
+	_wfopen_s( &fp, (const wchar_t*)path.c_str(), L"r");
     if( fp == NULL ) {
 		return NULL;
     }
@@ -848,49 +870,3 @@ tTVPApplication::GetDensity() const
 {
 	return ::GetDeviceCaps( ::GetDC(0), LOGPIXELSX );
 }
-
-
-int
-tTVPApplication::DPRINTF( const tjs_char* fmt, ...)
-{
-	size_t len;
-	va_list ap;
-	va_start( ap, fmt );
-	len = TJS_vsnprintf( NULL, 0, fmt, ap ) + 1;
-	va_end( ap );
-	std::unique_ptr<tjs_char[]> tmp(new tjs_char[len]);
-	va_start( ap, fmt );
-	len = TJS_vsnprintf( tmp.get(), len, fmt, ap );
-	va_end( ap );
-	PrintConsole(tmp.get(), len, false);
-	return len;
-}
-
-// ファイル用アロケータ
-extern "C" void *file_malloc(size_t size) { 
-	void *r = malloc(size);
-	if (!r) {
-		TVPClearOldStorageCache(0, false);
-		r = malloc(size);
-		if (!r) {
-			TVPClearOldStorageCache(0, true);
-			r = malloc(size);
-		}
-	}
-	return r;
-}
-
-extern "C" void *file_realloc(void *p, size_t newSize) {
-	void *r = realloc(p, newSize); 
-	if (!r) {
-		TVPClearOldStorageCache(0, false);
-		r = realloc(p, newSize);
-		if (!r) {
-			TVPClearOldStorageCache(0, true);
-			r = realloc(p, newSize);
-		}
-	}
-	return r;
-}
-
-extern "C" void file_free(void *p) { free(p); }

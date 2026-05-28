@@ -13,31 +13,58 @@
 #include "tjsCommHead.h"
 #include "tvpgl_ia32_intf.h"
 
+/* このファイルは x86 / x86_64 専用 (cpuid を使う)。
+   sources.cmake では KRKRZ_TARGET_X86 のときだけ KRKRZ_SRC に追加されるが、
+   うっかり ARM ビルドに混入しても安全に no-op になるよう内部で gating する。 */
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
+
 #ifdef _MSC_VER
 #include <windows.h>
 #include <intrin.h>
 extern "C" unsigned __int64 __xgetbv(int);
 static bool __os_has_avx_support() {
 	// Check if the OS will save the YMM registers
-	unsigned long long xcrFeatureMask = __xgetbv(_XCR_XFEATURE_ENABLED_MASK);
-	return (xcrFeatureMask & 6) == 6;
+	__try {
+		unsigned long long xcrFeatureMask = __xgetbv(_XCR_XFEATURE_ENABLED_MASK);
+		return (xcrFeatureMask & 6) == 6;
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		return false;
+	}
 }
 #else
-// VC 以外は動作未確認
-static inline int __cpuid(int CPUInfo[4],int InfoType) {
-  int highest;
-  asm volatile("cpuid":"=a"(*CPUInfo),"=b"(*(CPUInfo+1)),
-               "=c"(*(CPUInfo+2)),"=d"(*(CPUInfo+3)):"0"(InfoType));
-  return highest;
+#include <cpuid.h>
+#include <x86intrin.h>
+static inline void krkrz_cpuid(int CPUInfo[4],int InfoType) {
+  __cpuid(InfoType, CPUInfo[0], CPUInfo[1], CPUInfo[2], CPUInfo[3]);
 }
-static inline int __cpuidex(int CPUInfo[4],int InfoType,int ECXValue) {
-  int highest;
-	asm volatile("xchg{l}\t{%%}ebx, %1\n\t"
-		"cpuid\n\t"
-		"xchg{l}\t{%%}ebx, %1\n\t"
-		: "=a" (CPUInfo[0]), "=r" (CPUInfo[1]), "=c" (CPUInfo[2]), "=d" (CPUInfo[3])
-		: "0" (InfoType), "2" (ECXValue));
-  return highest;
+static inline void krkrz_cpuidex(int CPUInfo[4],int InfoType,int ECXValue) {
+  __cpuid_count(InfoType, ECXValue, CPUInfo[0], CPUInfo[1], CPUInfo[2], CPUInfo[3]);
+}
+#undef __cpuid
+#define __cpuid(info, op)          krkrz_cpuid((info), (op))
+#define __cpuidex(info, op, ecxv)  krkrz_cpuidex((info), (op), (ecxv))
+/* __builtin_cpu_supports は libgcc/compiler-rt の __cpu_model /
+   __cpu_indicator_init に依存するため、これらのランタイムを持たない
+   ツールチェインではリンクに失敗する。
+   代わりに CPUID の OSXSAVE(ECX bit27) を見てから _xgetbv(0) で XCR0 の
+   XMM(bit1)+YMM(bit2) 保存ビットを直接確認する。AVX/AVX2 とも OS 側の
+   YMM state 保存要件は同じなのでヘルパは 1 つで足りる。 */
+static inline unsigned long long krkrz_xgetbv(unsigned int index) {
+	unsigned int eax, edx;
+	__asm__ __volatile__("xgetbv" : "=a"(eax), "=d"(edx) : "c"(index));
+	return ((unsigned long long)edx << 32) | eax;
+}
+static bool __os_has_avx_support() {
+	int info[4] = {0,0,0,0};
+	krkrz_cpuid(info, 1);
+	const int OSXSAVE = 1 << 27;
+	const int AVX     = 1 << 28;
+	if( (info[2] & (OSXSAVE|AVX)) != (OSXSAVE|AVX) ) return false;
+	unsigned long long xcr0 = krkrz_xgetbv(0);
+	return (xcr0 & 0x6) == 0x6;
+}
+static bool __os_has_avx2_support() {
+	return __os_has_avx_support();
 }
 #endif
 
@@ -253,15 +280,19 @@ tjs_uint32 TVPCheckCPU()
 	// OS Check
 #ifdef _MSC_VER
 	if( flags & (TVP_CPU_HAS_AVX|TVP_CPU_HAS_AVX2) ) {
-		__try {
-			// YMMレジスタ(AVX)はWindowsなら7 SP1以降
-			if( !__os_has_avx_support() ) {
-				flags &= ~(TVP_CPU_HAS_AVX|TVP_CPU_HAS_AVX2);
-			}
-		} __except(EXCEPTION_EXECUTE_HANDLER) {
-			// exception had been ocured
+		// YMMレジスタ(AVX)はWindowsなら7 SP1以降
+		if( !__os_has_avx_support() ) {
 			flags &= ~(TVP_CPU_HAS_AVX|TVP_CPU_HAS_AVX2);
-		} 
+		}
+	}
+#else
+	/* GCC/Clang: __builtin_cpu_supports は OS の YMM 保存サポートも見て判定する。
+	   AVX フラグが立っているのに OS が未対応なら落とす。AVX2 も同様。 */
+	if( (flags & TVP_CPU_HAS_AVX) && !__os_has_avx_support() ) {
+		flags &= ~(TVP_CPU_HAS_AVX|TVP_CPU_HAS_AVX2);
+	}
+	if( (flags & TVP_CPU_HAS_AVX2) && !__os_has_avx2_support() ) {
+		flags &= ~TVP_CPU_HAS_AVX2;
 	}
 #endif
 
@@ -283,3 +314,5 @@ tjs_uint64 TVPGetTSCP( tjs_uint32 *aux ) {
 	}
 	return 0;
 }
+
+#endif /* x86 / x86_64 */

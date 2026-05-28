@@ -13,13 +13,13 @@
 
 #include "tjsCommHead.h"
 #include "FreeType.h"
-#ifdef __WIN32__
+#ifdef __WINVER__
 #include "NativeFreeTypeFace.h"
 #endif
 #include "uni_cp932.h"
 #include "cp932_uni.h"
 
-#include "BinaryStream.h"
+#include "StorageCache.h"
 #include "MsgIntf.h"
 #include "SysInitIntf.h"
 #include "ComplexRect.h"
@@ -75,7 +75,8 @@ OpenFontFile(const tjs_string &path)
         }
         _fontfiles.erase(n);
     }
-    auto fontfile = std::shared_ptr<iTJSBinaryStream>(TVPCreateBinaryStreamForRead( path, TJS_W("")));
+	// フォント用のファイルはキャッシュを介してオンメモリになるようにする
+	auto fontfile = std::shared_ptr<iTJSBinaryStream>(TVPGetStorageCache(path, true));
     _fontfiles[path] = fontfile;
 	entryFont(fontfile);
 	//TVPAddLog(TVPFormatMessage(TJS_W("openFont:%1"), ttstr(path.c_str())));
@@ -738,7 +739,7 @@ tFreeTypeFace::tFreeTypeFace(const std::vector<tjs_string> &fontname, tjs_uint32
 		{
 			Faces[i]->Face.reset( FreeTypeFaceList->GetFace( fontname[i], options ) );
 		}
-#ifdef __WIN32__
+#ifdef __WINVER__
 		if( Faces[i]->Face == nullptr )
 		{
 			if( options & TVP_FACE_OPTIONS_FILE )

@@ -58,7 +58,7 @@ public:
 	void TJS_INTF_METHOD Show() override {}
 	void TJS_INTF_METHOD StartBitmapCompletion(iTVPLayerManager * manager) override {}
 	void TJS_INTF_METHOD NotifyBitmapCompleted(iTVPLayerManager * manager,
-		tjs_int x, tjs_int y, const void * bits, const class BitmapInfomation * bitmapinfo,
+		tjs_int x, tjs_int y, const void * bits, const BITMAPINFO * bitmapinfo,
 		const tTVPRect &cliprect, tTVPLayerType type, tjs_int opacity) override {}
 	void TJS_INTF_METHOD EndBitmapCompletion(iTVPLayerManager * manager) override {}
 	void TJS_INTF_METHOD DumpLayerStructure() override {}
@@ -66,6 +66,13 @@ public:
 	bool TJS_INTF_METHOD SwitchToFullScreen( HWND window, tjs_uint w, tjs_uint h, tjs_uint bpp, tjs_uint color, bool changeresolution ) override { return true; }
 	void TJS_INTF_METHOD RevertFromFullScreen( HWND window, tjs_uint w, tjs_uint h, tjs_uint bpp, tjs_uint color ) override {}
 	bool TJS_INTF_METHOD WaitForVBlank( tjs_int* in_vblank, tjs_int* delayed ) override { return false; }
+
+#ifdef __GENERIC__	
+	virtual void TJS_INTF_METHOD UpdateVideo(int w, int h, std::function<void(char *dest, int pitch)> updator) override {};
+	virtual void TJS_INTF_METHOD ClearVideo() override {}
+	virtual void TJS_INTF_METHOD SetWaitVSync(bool enable) override {}
+#endif
+
 };
 
 //---------------------------------------------------------------------------

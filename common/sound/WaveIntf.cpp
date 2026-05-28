@@ -11,6 +11,7 @@
 #include "tjsCommHead.h"
 
 #include <algorithm>
+#include "miniaudio.h"
 #include "WaveIntf.h"
 #include "EventIntf.h"
 #include "StorageIntf.h"
@@ -24,15 +25,10 @@
 #define TVP_OPUS_DECODER_IMPLEMENT
 #define TVP_VORBIS_DECODER_IMPLEMENT
 
-extern void TVPQueueSoundSetGlobalVolume(tjs_int v);
-extern tjs_int TVPQueueSoundGetGlobalVolume();
-extern void TVPQueueSoundSetGlobalFocusMode(tTVPSoundGlobalFocusMode b);
-extern tTVPSoundGlobalFocusMode TVPQueueSoundGetGlobalFocusMode();
-
-static void (*TVPSetGlobalVolume)(tjs_int v) = TVPQueueSoundSetGlobalVolume;
-static tjs_int (*TVPGetGlobalVolume)() = TVPQueueSoundGetGlobalVolume;
-static void (*TVPSetGlobalFocusMode)(tTVPSoundGlobalFocusMode b) = TVPQueueSoundSetGlobalFocusMode;
-static tTVPSoundGlobalFocusMode (*TVPGetGlobalFocusMode)() = TVPQueueSoundGetGlobalFocusMode;
+static void (*TVPSetGlobalVolume)(tjs_int v) = 0;
+static tjs_int (*TVPGetGlobalVolume)() = 0;
+static void (*TVPSetGlobalFocusMode)(tTVPSoundGlobalFocusMode b) = 0;
+static tTVPSoundGlobalFocusMode (*TVPGetGlobalFocusMode)() = 0;
 
 //---------------------------------------------------------------------------
 // PCM related constants / definitions
@@ -98,14 +94,10 @@ tjs_uint8 TVP_GUID_KSDATAFORMAT_SUBTYPE_IEEE_FLOAT[16] =
 #endif
 
 //---------------------------------------------------------------------------
-// CPU specific optimized routine prototypes
+// PCM サンプルフォーマット変換: miniaudio の PCM conversion API に委譲する。
+// ma_pcm_s16_to_f32 / ma_pcm_f32_to_s16 は internal 実装が scalar 最適化ループで
+// auto-vectorize 前提。dither は不要 (非量子化 bit 増減ではなく単純 scale)。
 //---------------------------------------------------------------------------
-extern void PCMConvertLoopInt16ToFloat32(void * __restrict dest, const void * __restrict src, size_t numsamples);
-extern void PCMConvertLoopFloat32ToInt16(void * __restrict dest, const void * __restrict src, size_t numsamples);
-#if defined(__WIN32__) && (defined(_M_IX86)||defined(_M_X64))
-extern void PCMConvertLoopInt16ToFloat32_sse(void * __restrict dest, const void * __restrict src, size_t numsamples);
-extern void PCMConvertLoopFloat32ToInt16_sse(void * __restrict dest, const void * __restrict src, size_t numsamples);
-#endif
 
 
 //---------------------------------------------------------------------------
@@ -122,19 +114,7 @@ static void TVPConvertFloatPCMTo16bits(tjs_int16 *output, const float *input,
 	if(!downmix)
 	{
 		tjs_int total = channels * count;
-#if defined(__WIN32__) && (defined(_M_IX86)||defined(_M_X64))
-		bool use_sse =
-				(TVPCPUType & TVP_CPU_HAS_MMX) &&
-				(TVPCPUType & TVP_CPU_HAS_SSE) &&
-				(TVPCPUType & TVP_CPU_HAS_CMOV);
-
-		if(use_sse)
-			PCMConvertLoopFloat32ToInt16_sse(output, input, total);
-		else
-			PCMConvertLoopFloat32ToInt16(output, input, total);
-#else
-		PCMConvertLoopFloat32ToInt16(output, input, total);
-#endif
+		ma_pcm_f32_to_s16(output, input, (ma_uint64)total, ma_dither_mode_none);
 	}
 	else
 	{
@@ -368,20 +348,7 @@ static void TVPConvertIntegerPCMToFloat(float *output, const void *input,
 
 		if(validbits == 16)
 		{
-#if defined(__WIN32__) && (defined(_M_IX86)||defined(_M_X64))
-			// most popular
-			bool use_sse =
-					(TVPCPUType & TVP_CPU_HAS_MMX) &&
-					(TVPCPUType & TVP_CPU_HAS_SSE) &&
-					(TVPCPUType & TVP_CPU_HAS_CMOV);
-
-			if(use_sse)
-				PCMConvertLoopInt16ToFloat32_sse(output, p, total);
-			else
-				PCMConvertLoopInt16ToFloat32(output, p, total);
-#else
-			PCMConvertLoopInt16ToFloat32(output, p, total);
-#endif
+			ma_pcm_s16_to_f32(output, p, (ma_uint64)total, ma_dither_mode_none);
 		}
 		else
 		{
@@ -1804,32 +1771,32 @@ iTJSDispatch2 * TVPCreateWaveFlagsObject(iTJSDispatch2 * buffer)
 	return out;
 }
 //---------------------------------------------------------------------------
-extern tTJSNativeClass * TVPCreateNativeClass_QueueSoundBuffer();
-#ifdef __WIN32__
+#ifdef __WINVER__
 extern tTJSNativeClass * TVPCreateNativeClass_WaveSoundBuffer();
-extern bool TVPHasXAudio2DLL();
 extern void TVPSoundSetGlobalVolume(tjs_int v);
 extern tjs_int TVPSoundGetGlobalVolume();
 extern void TVPSoundSetGlobalFocusMode(tTVPSoundGlobalFocusMode b);
 extern tTVPSoundGlobalFocusMode TVPSoundGetGlobalFocusMode();
+#else
+extern tTJSNativeClass * TVPCreateNativeClass_QueueSoundBuffer();
+extern void TVPQueueSoundSetGlobalVolume(tjs_int v);
+extern tjs_int TVPQueueSoundGetGlobalVolume();
+extern void TVPQueueSoundSetGlobalFocusMode(tTVPSoundGlobalFocusMode b);
+extern tTVPSoundGlobalFocusMode TVPQueueSoundGetGlobalFocusMode();
 #endif
 tTJSNativeClass * TVPCreateNativeClass_SoundBuffer()
 {
-#ifdef __WIN32__
-	if( TVPHasXAudio2DLL() ) {	// TODO オプションでXAudio2かDirectSoundのどちらを使うか選べる方が好ましい、Wasapiに対応できればもっといい。オプション追加した場合、DS用オプションが色々あるのでその辺りも検討必要。
-		TVPSetGlobalVolume = TVPQueueSoundSetGlobalVolume;
-		TVPGetGlobalVolume = TVPQueueSoundGetGlobalVolume;
-		TVPSetGlobalFocusMode = TVPQueueSoundSetGlobalFocusMode;
-		TVPGetGlobalFocusMode = TVPQueueSoundGetGlobalFocusMode;
-		return TVPCreateNativeClass_QueueSoundBuffer();
-	} else {
-		TVPSetGlobalVolume = TVPSoundSetGlobalVolume;
-		TVPGetGlobalVolume = TVPSoundGetGlobalVolume;
-		TVPSetGlobalFocusMode = TVPSoundSetGlobalFocusMode;
-		TVPGetGlobalFocusMode = TVPSoundGetGlobalFocusMode;
-		return TVPCreateNativeClass_WaveSoundBuffer();
-	}
+#ifdef __WINVER__
+	TVPSetGlobalVolume = TVPSoundSetGlobalVolume;
+	TVPGetGlobalVolume = TVPSoundGetGlobalVolume;
+	TVPSetGlobalFocusMode = TVPSoundSetGlobalFocusMode;
+	TVPGetGlobalFocusMode = TVPSoundGetGlobalFocusMode;
+	return TVPCreateNativeClass_WaveSoundBuffer();
 #else
+	TVPSetGlobalVolume = TVPQueueSoundSetGlobalVolume;
+	TVPGetGlobalVolume = TVPQueueSoundGetGlobalVolume;
+	TVPSetGlobalFocusMode = TVPQueueSoundSetGlobalFocusMode;
+	TVPGetGlobalFocusMode = TVPQueueSoundGetGlobalFocusMode;
 	return TVPCreateNativeClass_QueueSoundBuffer();
 #endif
 }

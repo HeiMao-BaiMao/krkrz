@@ -18,28 +18,13 @@
 #endif
 #include "tjsVariantString.h"
 
-#if defined (__clang__) && (defined(ANDROID) || defined(NINTENDO))
 template<typename T>
 tjs_string to_format_str( T value, const tjs_char* format ) {
     tjs_char buff[128];
 	TJS_snprintf( buff, 128, format, value);
 	return tjs_string(buff);
 }
-#else
-#include <sstream>
-template<typename T>
-tjs_string to_format_str( T value, const tjs_char* format ) {
-#if 0
-	tjs_char buff[128];
-	TJS_snprintf( buff, 128, format, value);
-	return tjs_string(buff);
-#else
-	std::basic_ostringstream<tjs_char> sout;
-	sout << value;
-	return sout.str();
-#endif
-}
-#endif
+
 inline tjs_string to_tjs_string( int value ) { return to_format_str( value, TJS_W("%d") ); }
 inline tjs_string to_tjs_string( long value ) { return to_format_str( value, TJS_W("%ld") ); }
 inline tjs_string to_tjs_string( long long value ) { return to_format_str( value, TJS_W("%lld") ); }
@@ -49,6 +34,26 @@ inline tjs_string to_tjs_string( unsigned long long value ) { return to_format_s
 inline tjs_string to_tjs_string( float value ) { return to_format_str( value, TJS_W("%f") ); }
 inline tjs_string to_tjs_string( double value ) { return to_format_str( value, TJS_W("%lf") ); }
 
+template<
+    class CharT,
+    class Traits = std::char_traits<CharT>,
+    class Alloc = std::allocator<CharT>
+>
+std::basic_string<CharT, Traits, Alloc>
+string_replace_all(
+    std::basic_string<CharT, Traits, Alloc> s,
+    std::basic_string_view<CharT, Traits> from,
+    std::basic_string_view<CharT, Traits> to)
+{
+    if (from.empty()) return s;
+
+    typename std::basic_string<CharT, Traits, Alloc>::size_type pos = 0;
+    while ((pos = s.find(from, pos)) != std::basic_string<CharT, Traits, Alloc>::npos) {
+        s.replace(pos, from.size(), to);
+        pos += to.size();
+    }
+    return s;
+}
 
 namespace TJS
 {

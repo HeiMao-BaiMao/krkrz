@@ -31,6 +31,74 @@
 #include "Application.h"
 #include "CharacterSet.h"
 
+// XXX Version Code 
+static const tjs_int TVP_VERSION_MAJOR = 1;
+static const tjs_int TVP_VERSION_MINOR = 0;
+static const tjs_int TVP_VERSION_RELEASE = 0;
+static const tjs_int TVP_VERSION_BUILD = 1;
+
+/**
+ * GENERIC版のバージョンコード取得。別途再検討のこと
+*/
+bool TVPGetFileVersionOf(const tjs_char* module_filename, tjs_int& major, tjs_int& minor, tjs_int& release, tjs_int& build ) {
+	major = TVP_VERSION_MAJOR;
+	minor = TVP_VERSION_MINOR;
+	release = TVP_VERSION_RELEASE;
+	build = TVP_VERSION_BUILD;
+	return true;
+}
+
+//---------------------------------------------------------------------------
+// Static plugin support
+//---------------------------------------------------------------------------
+
+static std::vector<const iTVPStaticPlugin*> TVPStaticPlugins;
+
+extern "C" void TVPRegisterPlugin(const iTVPStaticPlugin* plugin)
+{
+    if(plugin) {
+        TVPStaticPlugins.push_back(plugin);
+    }
+}
+
+static const iTVPStaticPlugin* TVPFindStaticPlugin(const ttstr& name)
+{
+    // Extract base name without path and extension for matching
+    ttstr basename = name;
+    // Remove path
+    tjs_int pos = basename.GetLen() - 1;
+    while(pos >= 0) {
+        tjs_char c = basename[pos];
+        if(c == TJS_W('/') || c == TJS_W('\\')) {
+            basename = ttstr(basename.c_str() + pos + 1);
+            break;
+        }
+        pos--;
+    }
+    // Remove extension
+    pos = basename.GetLen() - 1;
+    while(pos >= 0) {
+        if(basename[pos] == TJS_W('.')) {
+            basename = ttstr(basename.c_str(), pos);
+            break;
+        }
+        pos--;
+    }
+    
+    for(const auto* plugin : TVPStaticPlugins) {
+        if(plugin && plugin->name) {
+            ttstr pluginName(plugin->name);
+            if(pluginName == basename || pluginName == name) {
+                return plugin;
+            }
+        }
+    }
+    return nullptr;
+}
+
+//---------------------------------------------------------------------------
+
+
 //---------------------------------------------------------------------------
 // export table
 //---------------------------------------------------------------------------
@@ -152,26 +220,75 @@ static inline tjs_string ChangeFileExt( const tjs_string& path, const tjs_string
 };
 
 //---------------------------------------------------------------------------
-tTVPPlugin::tTVPPlugin(const ttstr & name) : Name(name)
+tTVPPlugin::tTVPPlugin(const ttstr & name) : Name(name), Instance(nullptr),
+	Holder(nullptr), V2Link(nullptr), V2Unlink(nullptr)
 {
+	// First, try to find a statically registered plugin
+	const iTVPStaticPlugin* staticPlugin = TVPFindStaticPlugin(name);
+	if(staticPlugin) {
+		V2Link = staticPlugin->link;
+		V2Unlink = staticPlugin->unlink;
+		
+		// link
+		if(V2Link) {
+			V2Link(TVPGetFunctionExporter());
+		}
+		return;
+	}
+
 	// load shared library
-    // check libXXX...
-    ttstr soname = name.AsLowerCase();
-    if( soname.GetLen() <= 3 ||
-        soname[0] != TJS_W('l') ||
-        soname[1] != TJS_W('i') ||
-        soname[2] != TJS_W('b') ) {
-        soname = TJS_W("lib") + soname;
-    }
-    // check libXXX.so or dll
-    tjs_int len = soname.GetLen();
-    if( soname[len-1] == TJS_W('l') && soname[len-2] == TJS_W('l') && soname[len-3] == TJS_W('d') ) {
-        tjs_string extso = ChangeFileExt( soname.AsStdString(), TJS_W("so") );
-        soname = ttstr( extso );
-    }
+	ttstr soname = name;
+	tjs_int len = soname.GetLen();
+	bool isDll = len >= 4 &&
+		soname[len-1] == TJS_W('l') &&
+		soname[len-2] == TJS_W('l') &&
+		soname[len-3] == TJS_W('d') &&
+		soname[len-4] == TJS_W('.');
+
+	if(isDll) {
+#if defined(_WIN32)
+		// Keep XXX.dll as-is on Windows.
+#elif defined(__APPLE__)
+		if( soname.GetLen() <= 3 ||
+			soname[0] != TJS_W('l') ||
+			soname[1] != TJS_W('i') ||
+			soname[2] != TJS_W('b') ) {
+			soname = TJS_W("lib") + soname;
+		}
+		tjs_string ext = ChangeFileExt( soname.AsStdString(), TJS_W("dylib") );
+		soname = ttstr( ext );
+#else
+		if( soname.GetLen() <= 3 ||
+			soname[0] != TJS_W('l') ||
+			soname[1] != TJS_W('i') ||
+			soname[2] != TJS_W('b') ) {
+			soname = TJS_W("lib") + soname;
+		}
+		tjs_string ext = ChangeFileExt( soname.AsStdString(), TJS_W("so") );
+		soname = ttstr( ext );
+#endif
+	} else {
+		// Keep existing behavior for non-dll names.
+		if( soname.GetLen() <= 3 ||
+			soname[0] != TJS_W('l') ||
+			soname[1] != TJS_W('i') ||
+			soname[2] != TJS_W('b') ) {
+			soname = TJS_W("lib") + soname;
+		}
+	}
+
+	ttstr libpath;
+#ifdef ANDROID
+	// 直接ロードのみ可
+	libpath = soname;
+#else
 	Holder = new tTVPPluginHolder(soname);
 	if( TVPCheckExistentLocalFile(Holder->GetLocalName()) ) {
-		Instance = Application->LoadLibrary( Holder->GetLocalName().AsStdString().c_str() );
+		libpath  = Holder->GetLocalName();
+	}
+#endif
+	if (!libpath.IsEmpty()) {
+		Instance = Application->LoadLibrary(libpath.c_str());
 	}
 	if(!Instance)
 	{
@@ -216,8 +333,13 @@ bool tTVPPlugin::Uninit()
  		if(TJS_FAILED(V2Unlink())) return false;
 	}
 
-	Application->FreeLibrary(Instance);
-	delete Holder;
+	if (Instance)
+	{
+		Application->FreeLibrary(Instance);
+	}
+	if (Holder) {
+		delete Holder;
+	}
 	return true;
 }
 
@@ -311,7 +433,17 @@ bool TVPUnloadPlugin(const ttstr & name)
 	return false;
 }
 //---------------------------------------------------------------------------
-
+void TVPLoadStaticPluigins(void)
+{
+	// load each plugin
+    for(const auto* plugin : TVPStaticPlugins) {
+        if(plugin && plugin->name) {
+			TVPAddImportantLog(ttstr(TJS_W("(info) Auto Loading Static Plugin:")) + ttstr(plugin->name));
+			TVPLoadPlugin(plugin->name);
+		}
+	}
+}
+//---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------
 // some service functions for plugin

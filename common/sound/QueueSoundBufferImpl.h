@@ -14,8 +14,7 @@
 
 #include "WaveIntf.h"
 #include "WaveLoopManager.h"
-#include "AudioDevice.h"
-#include "SoundPlayer.h"
+#include "AudioStream.h"
 
 //---------------------------------------------------------------------------
 // Constants
@@ -64,7 +63,16 @@ class tTJSNI_QueueSoundBuffer : public tTJSNI_BaseWaveSoundBuffer
 
 	tTVPWaveDecoder * Decoder;
 	class tTVPSoundDecodeThread * Thread;
-	tTVPSoundPlayer Player;
+
+	// for sound player
+	iTVPAudioStream *Stream;
+	std::vector<class tTVPSoundSamplesBuffer*> Samples;
+
+	bool IsPlaying() { return Stream && Stream->IsPlaying(); }
+
+	tjs_int64 GetCurrentPlayingPosition();
+
+	bool Paused;
 
 	tTVPWaveFormat InputFormat;
 	bool Looping;
@@ -96,7 +104,6 @@ class tTJSNI_QueueSoundBuffer : public tTJSNI_BaseWaveSoundBuffer
 	void StartPlay();
 	void StopPlay();
 
-	void CreateSoundBuffer();
 	void ResetLastCheckedDecodePos();
 public:
 	bool ThreadCallbackEnabled;
@@ -111,8 +118,8 @@ public:
 
 	tTJSCriticalSection & GetBufferCS() { return BufferCS; }
 
-	void PushPlayStream( class tTVPSoundSamplesBuffer* buffer );
-	void ReleasePlayedSamples( class tTVPSoundSamplesBuffer* buffer, bool continued );
+	void PushPlaySample( class tTVPSoundSamplesBuffer* buffer );
+	void ReleasePlayedSample( class tTVPSoundSamplesBuffer* buffer);
 
 	tjs_int FireLabelEventsAndGetNearestLabelEventStep(tjs_int64 tick);
 	tjs_int GetNearestEventStep();

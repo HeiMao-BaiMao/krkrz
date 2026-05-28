@@ -30,7 +30,6 @@
 #include "BinaryStream.h"
 #include "Application.h"
 #include "Exception.h"
-#include "ApplicationSpecialPath.h"
 #include "TickCount.h"
 #include "CharacterSet.h"
 
@@ -41,6 +40,26 @@
 tjs_string TVPNativeProjectDir;
 tjs_string TVPNativeDataPath;
 bool TVPProjectDirSelected = false;
+
+//---------------------------------------------------------------------------
+// CPU feature flags
+//
+// Win32 (= win32/environ/DetectCPU.cpp) ビルドではそちらが TVPCPUType を定義する。
+// それ以外 (Linux/macOS/Android などの Generic / SDL3 ビルド) では本ファイルで
+// 0 初期化したものを実体として持ち、TVPAfterSystemInit から共通の
+// `TVPInitCPUFeatures()` を呼んで適切な値を入れる。
+//
+// 旧実装は ARM で「無条件に NEON フラグを立てる」「Linux/macOS の x86_64 では
+// 何もしない」という個別ロジックを SysInit 内に直書きしていたが、検出ロジックは
+// `common/visual/cpu_detect.cpp` の `TVPInitCPUFeatures()` に集約済み。
+//---------------------------------------------------------------------------
+#include "cpu_detect.h"
+#if !defined(_WIN32)
+#include "tvpgl_ia32_intf.h"
+extern "C" {
+    tjs_uint32 TVPCPUType = 0;
+}
+#endif
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------
@@ -51,7 +70,7 @@ bool TVPProjectDirSelected = false;
 // (or other security modules like XP3 encryption module) to check
 // the changes which is not intended by the contents author.
 const static char TVPSystemSecurityOptions[] =
-"-- TVPSystemSecurityOptions disablemsgmap(0):forcedataxp3(0):acceptfilenameargument(0) --";
+"-- TVPSystemSecurityOptions disablemsgmap(0):forcedataxp3(0):acceptfilenameargument(0):disableapplock(0) --";
 //---------------------------------------------------------------------------
 int GetSystemSecurityOption(const char *name)
 {
@@ -191,11 +210,14 @@ void TVPBeforeSystemInit()
 //---------------------------------------------------------------------------
 static void TVPDumpOptions();
 
-#ifdef _WIN32
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
 extern "C" {
 	extern void TVPGL_IA32_Init();
 }
 extern void TVPGL_SSE2_Init();
+#endif
+#if defined(__aarch64__) || defined(__arm__) || defined(_M_ARM) || defined(_M_ARM64)
+extern void TVPGL_NEON_Init();
 #endif
 
 //---------------------------------------------------------------------------
@@ -297,10 +319,21 @@ void TVPAfterSystemInit()
 	// dump option
 	TVPDumpOptions();
 
-	// initilaize x86 graphic routines
-#ifdef _WIN32	// CPUごとに準備した方が良い
+	// CPU 機能を検出して TVPCPUType をセットする (portable entry)。
+	// x86 では cpuid + (MSVC では SEH 経由 / GCC/Clang では __builtin_cpu_supports
+	// 経由の) AVX OS-support 検査、ARM64 では baseline 必須として NEON/ASIMD 立て、
+	// ARMv7 Linux/Android では HWCAP 経由検出。詳細は cpu_detect.h コメント参照。
+	TVPInitCPUFeatures();
+	TVPApplyCPUFeatureOverrides();
+
+	// 検出した CPU 機能に応じて画像処理 SIMD ルーチンを wire-up する。
+	// 各 _Init は内部で TVPCPUType の対応ビットを見て自分が動くべきか判定する。
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
 	TVPGL_IA32_Init();
-	TVPGL_SSE2_Init();
+	TVPGL_SSE2_Init();    // 内部で SSE2 / AVX2 を見て chain
+#endif
+#if defined(__aarch64__) || defined(__arm__) || defined(_M_ARM) || defined(_M_ARM64)
+	TVPGL_NEON_Init();    // 内部で TVP_CPU_HAS_ARM_NEON を見て dispatch
 #endif
 
 	// timer precision
@@ -386,7 +419,8 @@ void TVPMainWindowClosed()
 //---------------------------------------------------------------------------
 static std::vector<std::string> * TVPGetEmbeddedOptions()
 {
-	return Application->loadLinesFromResource(TJS_W("config.cf"));
+	tjs_string path = Application->ResourcePath() + TJS_W("config.cf");
+	return TVPReadLines(path.c_str());
 }
 
 //---------------------------------------------------------------------------
@@ -402,7 +436,7 @@ static std::vector<std::string> * TVPGetConfigFileOptions(const tjs_string& file
 	{
 		try
 		{
-			ret = Application->loadLinesFromFile(filename.c_str());
+			ret = TVPReadLines(filename.c_str());
 		}
 		catch(Exception & e)
 		{
@@ -552,30 +586,25 @@ static void TVPInitProgramArgumentsAndDataPath(bool stop_after_datapath_got)
 			PushConfigFileOptions(options[1]); // has more priority
 			PushConfigFileOptions(options[0]); // has lesser priority
 
-			// データ保存先
-#if 0
-			// read datapath
-			tTJSVariant val;
-			tjs_string config_datapath;
-			if(TVPGetCommandLine(TJS_W("-datapath"), &val))
-				config_datapath = ((ttstr)val).AsStdString();
-			TVPNativeDataPath = ApplicationSpecialPath::GetDataPathDirectory(config_datapath, ExePath());
-#else
-			TVPNativeDataPath = Application->DataPath();
-#endif
+			TVPNativeDataPath = Application->InitDataPath();
 
 			if(stop_after_datapath_got) return;
 
 			// read per-user configuration file
-			// TODO : ユーザー設定は SharedPreference から読み込むようにするのが望ましい
-			//options[2] = TVPGetConfigFileOptions(ApplicationSpecialPath::GetUserConfigFileName(config_datapath, ExePath()));
+			// TVPNativeDataPath がローカルパスでないとこれだと開けない
+			if (false) {
+				ttstr fname  = TVPNativeDataPath;
+				fname += TVPChopStorageExt(TVPExtractStorageName(ttstr(Application->ExePath().c_str())));
+				fname += TJS_W(".cfu");	
+				options[2] = TVPGetConfigFileOptions(fname.c_str());
+			}
 
 			// push each options into option stock
 			// we need to clear TVPProgramArguments first because of the
 			// option priority order.
 			TVPProgramArguments.clear();
 			PushAllCommandlineArguments();
-			//PushConfigFileOptions(options[2]); // has more priority
+			PushConfigFileOptions(options[2]); // has more priority
 			PushConfigFileOptions(options[1]); // has more priority
 			PushConfigFileOptions(options[0]); // has lesser priority
 		} catch(...) {

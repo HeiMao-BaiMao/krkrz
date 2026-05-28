@@ -49,6 +49,55 @@
 #pragma comment(lib, "version")
 
 //---------------------------------------------------------------------------
+// Static plugin support
+//---------------------------------------------------------------------------
+
+static std::vector<const iTVPStaticPlugin*> TVPStaticPlugins;
+
+extern "C" void TVPRegisterPlugin(const iTVPStaticPlugin* plugin)
+{
+    if(plugin) {
+        TVPStaticPlugins.push_back(plugin);
+    }
+}
+
+static const iTVPStaticPlugin* TVPFindStaticPlugin(const ttstr& name)
+{
+    // Extract base name without path and extension for matching
+    ttstr basename = name;
+    // Remove path
+    tjs_int pos = basename.GetLen() - 1;
+    while(pos >= 0) {
+        tjs_char c = basename[pos];
+        if(c == TJS_W('/') || c == TJS_W('\\')) {
+            basename = ttstr(basename.c_str() + pos + 1);
+            break;
+        }
+        pos--;
+    }
+    // Remove extension
+    pos = basename.GetLen() - 1;
+    while(pos >= 0) {
+        if(basename[pos] == TJS_W('.')) {
+            basename = ttstr(basename.c_str(), pos);
+            break;
+        }
+        pos--;
+    }
+    
+    for(const auto* plugin : TVPStaticPlugins) {
+        if(plugin && plugin->name) {
+            ttstr pluginName(plugin->name);
+            if(pluginName == basename || pluginName == name) {
+                return plugin;
+            }
+        }
+    }
+    return nullptr;
+}
+//---------------------------------------------------------------------------
+
+//---------------------------------------------------------------------------
 // export table
 //---------------------------------------------------------------------------
 static tTJSHashTable<ttstr, void *> TVPExportFuncs;
@@ -187,7 +236,7 @@ HRESULT __stdcall tTVPStorageProvider::GetStreamForRead(
 	iTJSBinaryStream *stream0;
 	try
 	{
-		stream0 = TVPCreateStream(url);
+		stream0 = TVPCreateStream((const tjs_char*)url);
 	}
 	catch(...)
 	{
@@ -276,9 +325,22 @@ tTVPPlugin::tTVPPlugin(const ttstr & name, ITSSStorageProvider *storageprovider)
 	GetKMPModule = NULL;
 #endif
 
+	// First, try to find a statically registered plugin
+	const iTVPStaticPlugin* staticPlugin = TVPFindStaticPlugin(name);
+	if(staticPlugin) {
+		V2Link   = (tTVPV2LinkProc)staticPlugin->link;
+		V2Unlink = (tTVPV2UnlinkProc)staticPlugin->unlink;
+		
+		// link
+		if(V2Link) {
+			V2Link(TVPGetFunctionExporter());
+		}
+		return;
+	}
+
 	// load DLL
 	Holder = new tTVPPluginHolder(name);
-	Instance = LoadLibrary(Holder->GetLocalName().AsStdString().c_str());
+	Instance = LoadLibrary((const wchar_t*)Holder->GetLocalName().AsStdString().c_str());
 	if(!Instance)
 	{
 		delete Holder;
@@ -343,12 +405,12 @@ tTVPPlugin::tTVPPlugin(const ttstr & name, ITSSStorageProvider *storageprovider)
 			unsigned long index = 0;
 			while(true)
 			{
-				tjs_char mediashortname[33];
-				tjs_char buf[256];
+				wchar_t mediashortname[33];
+				wchar_t buf[256];
 				HRESULT hr = TSSModule->GetSupportExts(index,
 					mediashortname, buf, 255);
 				if(hr == S_OK)
-					SupportedExts.push_back(ttstr(buf).AsLowerCase());
+					SupportedExts.push_back(ttstr((tjs_char*)buf).AsLowerCase());
 				else
 					break;
 				index ++;
@@ -399,8 +461,8 @@ bool tTVPPlugin::Uninit()
 	if(TSSModule) TSSModule->Release();
 	if(IsSusiePicturePlugin) TVPUnloadPictureSPI(Instance);
 	if(IsSusieArchivePlugin) TVPUnloadArchiveSPI(Instance);
-	FreeLibrary(Instance);
-	delete Holder;
+	if (Instance) FreeLibrary(Instance);
+	if (Holder) 	delete Holder;
 	return true;
 }
 //---------------------------------------------------------------------------
@@ -511,7 +573,7 @@ static tjs_int TVPAutoLoadPluginCount = 0;
 static void TVPSearchPluginsAt(std::vector<tTVPFoundPlugin> &list, tjs_string folder)
 {
 	WIN32_FIND_DATA ffd;
-	HANDLE handle = ::FindFirstFile((folder + TJS_W("*.tpm")).c_str(), &ffd);
+	HANDLE handle = ::FindFirstFile((const wchar_t*)(folder + TJS_W("*.tpm")).c_str(), &ffd);
 	if(handle != INVALID_HANDLE_VALUE)
 	{
 		BOOL cont;
@@ -521,7 +583,7 @@ static void TVPSearchPluginsAt(std::vector<tTVPFoundPlugin> &list, tjs_string fo
 			{
 				tTVPFoundPlugin fp;
 				fp.Path = folder;
-				fp.Name = ffd.cFileName;
+				fp.Name = (const tjs_char*)ffd.cFileName;
 				list.push_back(fp);
 			}
 			cont = FindNextFile(handle, &ffd);
@@ -595,7 +657,7 @@ ITSSWaveDecoder * TVPSearchAvailTSSWaveDecoder(const ttstr & storage, const ttst
 			// retrieve instance from (*i)->TSSModule
 			IUnknown *intf = NULL;
 			HRESULT hr = (*i)->TSSModule->GetMediaInstance(
-				(tjs_char*)storage.c_str(), &intf);
+				(wchar_t*)storage.c_str(), &intf);
 			if(SUCCEEDED(hr))
 			{
 				try
@@ -890,10 +952,10 @@ bool TVPGetFileVersionOf(const tjs_char* module_filename, tjs_int &major, tjs_in
 	UINT dum;
 	DWORD dum2;
 
-	tjs_char* filename = new tjs_char[TJS_strlen(module_filename) + 1];
+	wchar_t* filename = new wchar_t[TJS_strlen(module_filename) + 1];
 	try
 	{
-		TJS_strcpy(filename, module_filename);
+		TJS_strcpy((tjs_char*)filename, module_filename);
 
 		DWORD size = ::GetFileVersionInfoSize (filename, &dum2);
 		if(size)
@@ -903,7 +965,7 @@ bool TVPGetFileVersionOf(const tjs_char* module_filename, tjs_int &major, tjs_in
 			{
 				if(::GetFileVersionInfo(filename, 0, size, (void*)VersionInfo))
 				{
-					if(::VerQueryValue((void*)VersionInfo, TJS_W("\\"), (void**)(&FixedFileInfo),
+					if(::VerQueryValue((void*)VersionInfo, L"\\", (void**)(&FixedFileInfo),
 						&dum))
 					{
 						major   = FixedFileInfo->dwFileVersionMS >> 16;

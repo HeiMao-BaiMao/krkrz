@@ -20,9 +20,11 @@ class tTJSNI_BaseLayer;
 
 #ifndef _WIN32
 typedef void* HWND;
-struct BITMAPINFO;
 #endif
 
+#ifdef __GENERIC__
+#include <functional>
+#endif
 
 /*[*/
 //---------------------------------------------------------------------------
@@ -375,7 +377,7 @@ public:
 	//!				示される矩形を x, y 位置に転送すればよいが、描画矩形の大きさに合わせた
 	//!				拡大や縮小などは描画デバイス側で面倒を見る必要がある。
 	virtual void TJS_INTF_METHOD NotifyBitmapCompleted(iTVPLayerManager * manager,
-		tjs_int x, tjs_int y, const void * bits, const class BitmapInfomation * bitmapinfo,
+		tjs_int x, tjs_int y, const void * bits, const BITMAPINFO * bitmapinfo,
 		const tTVPRect &cliprect, tTVPLayerType type, tjs_int opacity) = 0;
 
 	//! @brief		(LayerManager->DrawDevice) ビットマップの描画を終了する
@@ -415,6 +417,33 @@ public:
 	//! @param		delayed		1フレーム遅延が発生したかどうかを返す( !0 : 発生、0: 発生せず )
 	//! @return		Wait可不可 true : 可能、false : 不可
 	virtual bool TJS_INTF_METHOD WaitForVBlank( tjs_int* in_vblank, tjs_int* delayed ) = 0;
+
+#ifdef __GENERIC__
+	//---------------------------------------------------------------------------
+	// Generic版用拡張メソッド
+	//---------------------------------------------------------------------------
+
+	//! @brief		(Window->DrawDevice) ビデオの更新
+	//! @param		w			ビデオの幅
+	//! @param		h			ビデオの高さ
+	//! @param		updator		ビデオの更新を行う関
+	virtual void UpdateVideo(int w, int h, std::function<void(char *dest, int pitch)> updator) = 0;
+
+	//! @brief		(Window->DrawDevice) ビデオのクリア
+	//! @note		ビデオの内容をクリアする。通常は黒でクリアされる。
+	//!				このメソッドはビデオ再生完了後に呼び出すことが想定される
+	//!				(ビデオの内容をクリアするため)。このメソッドを呼び出すと、
+	//!				ビデオの内容がクリアされ、次に UpdateVideo()
+	//!				が呼ばれるまでビデオの内容は更新されない。
+	virtual void ClearVideo() = 0;
+
+	//! @brief		(Window->DrawDevice) VSync待ちを有効にするかどうかを設定する
+	//! @param		enable		有効にするかどうか
+	//! @note		このメソッドは、VSync待ちを有効にするかどうかを設定する。
+	//!				有効にすると、描画デバイスは低層側の機能で VSYnc を待つ
+	virtual void SetWaitVSync(bool enable) = 0;
+#endif
+
 };
 //---------------------------------------------------------------------------
 /*]*/
@@ -536,10 +565,20 @@ public:
 	virtual bool TJS_INTF_METHOD SwitchToFullScreen( HWND window, tjs_uint w, tjs_uint h, tjs_uint bpp, tjs_uint color, bool changeresolution );
 	virtual void TJS_INTF_METHOD RevertFromFullScreen( HWND window, tjs_uint w, tjs_uint h, tjs_uint bpp, tjs_uint color );
 
+#ifdef __GENERIC__	
+	//---------------------------------------------------------------------------
+	// Generic版用拡張メソッド
+	//---------------------------------------------------------------------------
+	virtual void TJS_INTF_METHOD UpdateVideo(int w, int h, std::function<void(char *dest, int pitch)> updator){};
+	virtual void TJS_INTF_METHOD ClearVideo(){}
+	virtual void TJS_INTF_METHOD SetWaitVSync(bool enable) {}
+#endif
+
 // ほかのメソッドについては実装しない
 };
 //---------------------------------------------------------------------------
 
-extern tTJSNativeClass* TVPCreateDefaultDrawDevice();
+// デフォルトDrawDevice Class を取得
+extern tTJSNativeClass* TVPGetDefaultDrawDevice();
 
 #endif

@@ -20,14 +20,7 @@
 	#define TVP_MSG_DECL_NULL(name) extern tTJSMessageHolder name;
 #endif
 
-
-#ifdef _WIN32
-#define WIDEN2(x) L ## x
-#define WIDEN(x) WIDEN2(x)
-#else
-#define WIDEN2(x) u ## x
-#define WIDEN(x) WIDEN2(x)
-#endif
+#define WIDEN(x) TJS_W(x)
 
 //---------------------------------------------------------------------------
 // Message Strings

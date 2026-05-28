@@ -27,7 +27,7 @@
 
 #include "Application.h"
 #include "TVPVideoOverlay.h"
-#include "BitmapInfomationImpl.h"
+#include "BitmapInfomation.h"
 
 //---------------------------------------------------------------------------
 class tTVPVideoModule
@@ -79,7 +79,7 @@ static void TVPUnloadKrMovie();
 tTVPVideoModule::tTVPVideoModule(const ttstr &name)
 {
 	Holder = new tTVPPluginHolder(name);
-	Handle = LoadLibrary(Holder->GetLocalName().AsStdString().c_str());
+	Handle = LoadLibrary((const wchar_t*)Holder->GetLocalName().AsStdString().c_str());
 	if(!Handle)
 	{
 		delete Holder;
@@ -316,26 +316,26 @@ void tTJSNI_VideoOverlay::Open(const ttstr &_name)
 		if(flash)
 		{
 			mod->GetVideoOverlayObject(EventQueue.GetOwner(),
-				NULL, (LocalTempStorageHolder->GetLocalName() + param).c_str(),
-				ext.c_str(), 0, &VideoOverlay);
+				NULL, (const wchar_t*)(LocalTempStorageHolder->GetLocalName() + param).c_str(),
+				(const wchar_t*)ext.c_str(), 0, &VideoOverlay);
 		}
 		else
 		{
 			if(Mode == vomLayer)
 				mod->GetVideoLayerObject(EventQueue.GetOwner(),
-					istream, name.c_str(), ext.c_str(),
+					istream, (const wchar_t*)name.c_str(), (const wchar_t*)ext.c_str(),
 					size, &VideoOverlay);
 			else if(Mode == vomMixer)
 				mod->GetMixingVideoOverlayObject(EventQueue.GetOwner(),
-					istream, name.c_str(), ext.c_str(),
+					istream, (const wchar_t*)name.c_str(), (const wchar_t*)ext.c_str(),
 					size, &VideoOverlay);
 			else if(Mode == vomMFEVR)
 				mod->GetMFVideoOverlayObject(EventQueue.GetOwner(),
-					istream, name.c_str(), ext.c_str(),
+					istream, (const wchar_t*)name.c_str(), (const wchar_t*)ext.c_str(),
 					size, &VideoOverlay);
 			else
 				mod->GetVideoOverlayObject(EventQueue.GetOwner(),
-					istream, name.c_str(), ext.c_str(),
+					istream, (const wchar_t*)name.c_str(), (const wchar_t*)ext.c_str(),
 					size, &VideoOverlay);
 		}
 
@@ -1067,7 +1067,7 @@ void tTJSNI_VideoOverlay::SetMixingLayer( tTJSNI_BaseLayer *l )
 				tTVPBitmap *bmp = l->GetMainImage()->GetBitmap();
 				if( bmp )
 				{
-					const BitmapInfomationImpl* bmpinfo = (BitmapInfomationImpl*)bmp->GetBitmapInfomation();
+					const BitmapInfomation* bmpinfo = bmp->GetBitmapInfomation();
 
 					// 自前でDCを作る
 					HDC hdc;

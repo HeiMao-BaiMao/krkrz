@@ -115,7 +115,6 @@ static char TVPObjectHashMapLogStream[sizeof(tTVPPipeStream)];
 //---------------------------------------------------------------------------
 void TVPStartObjectHashMapLog(void)
 {
-#ifndef ENABLE_DEBUGGER
 	if(TJSObjectHashMapEnabled())
 	{
 		// begin logging
@@ -146,7 +145,7 @@ void TVPStartObjectHashMapLog(void)
 		si.wShowWindow = SW_SHOWNORMAL;
 
 		tjs_char szFull[_MAX_PATH];
-		::GetModuleFileName(NULL, szFull, sizeof(szFull) / sizeof(tjs_char));
+		::GetModuleFileName(NULL, (wchar_t*)szFull, sizeof(szFull) / sizeof(tjs_char));
 		tjs_string exepath(szFull);
 		BOOL ret =
 			::CreateProcess(
@@ -185,7 +184,6 @@ void TVPStartObjectHashMapLog(void)
 		// end object mapping
 		TJSReleaseObjectHashMap();
 	}
-#endif
 }
 //---------------------------------------------------------------------------
 static tTVPAtExit TVPReportUnfreedObjectsAtExit

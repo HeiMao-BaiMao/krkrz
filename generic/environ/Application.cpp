@@ -8,7 +8,6 @@
 
 #include <errno.h>
 #include <string>
-#include <sstream>
 #include <stdio.h>
 #include <climits>
 #include "Application.h"
@@ -16,6 +15,7 @@
 #include "ScriptMgnIntf.h"
 #include "SystemIntf.h"
 #include "DebugIntf.h"
+#include "LogIntf.h"
 #include "TickCount.h"
 #include "NativeEventQueue.h"
 #include "CharacterSet.h"
@@ -28,31 +28,14 @@
 #include "Random.h"
 #include "Exception.h"
 #include "StorageImpl.h"
-#include "VideoOvlImpl.h"
 #include "StorageCache.h"
+#include "StorageIntf.h"
+#include "ScriptMgnIntf.h"
 
 #include <picojson/picojson.h>
 #include <algorithm>
 
-static const tjs_int TVP_VERSION_MAJOR = 1;
-static const tjs_int TVP_VERSION_MINOR = 0;
-static const tjs_int TVP_VERSION_RELEASE = 0;
-static const tjs_int TVP_VERSION_BUILD = 1;
-
 tTVPApplication* Application;
-
-/**
- * Android 版のバージョン番号はソースコードに埋め込む
- * パッケージのバージョン番号はアプリのバージョンであって、エンジンのバージョンではないため
- * apk からバージョン番号を取得するのは好ましくない。
- */
-void TVPGetFileVersionOf( tjs_int& major, tjs_int& minor, tjs_int& release, tjs_int& build ) {
-	major = TVP_VERSION_MAJOR;
-	minor = TVP_VERSION_MINOR;
-	release = TVP_VERSION_RELEASE;
-	build = TVP_VERSION_BUILD;
-}
-
 
 /**
  * コンストラクタ
@@ -127,8 +110,9 @@ bool tTVPApplication::appDispatch(NativeEvent& ev) {
 
 void tTVPApplication::ShowException( const tjs_char* e ) 
 {
+	ttstr error_message(e);
+	TVPLOG_CRITICAL("{}", error_message);
 	tjs_string caption = (const tjs_char*)TVPFatalError;
-	PrintConsole( e, TJS_strlen(e), true );
 	MessageDlg( e, caption, 0, 0 );
 }
 
@@ -180,13 +164,15 @@ tTVPApplication::InitArgs(int argc, tjs_char **argv)
 	}
 }
 
+extern void TVPLoadStaticPluigins(void);
+
 bool tTVPApplication::InitializeApplication() 
 {
 	try {
 		{
-			const tjs_char *filename = TJS_W("messages.json");
+			tjs_string path = Application->ResourcePath() + TJS_W("messages.json");
 			tjs_uint64 flen;
-			auto buf = ReadResource(filename, &flen);
+			auto buf = TVPReadStream(path.c_str(), &flen);
 			if (buf.get() == nullptr ) {
 				TVPAddImportantLog( TJS_W("failed to load message file") );
 				return false;
@@ -223,11 +209,18 @@ bool tTVPApplication::InitializeApplication()
 		// システム初期化
 		TVPSystemInit();
 
+		// スクリプトエンジン取得
+		OnInitialize(TVPGetScriptEngine());
+
 		SetTitle( tjs_string(TVPKirikiri) );
 
 #ifndef TVP_IGNORE_LOAD_TPM_PLUGIN
 //		TVPLoadPluigins(); // load plugin module *.tpm
 #endif
+
+		// 静的リンクされたプラグインのロード
+		TVPLoadStaticPluigins();
+
 		// start image load thread
 		image_load_thread_->StartThread();
 		file_cache_thread_->StartThread();
@@ -275,6 +268,14 @@ void tTVPApplication::ResizeScreen()
 	// 全ウインドウの更新実行
     for (auto it = windows_.begin();it != windows_.end();it++) {
 		(*it)->SendMessage(AM_DISPLAY_RESIZE, 0, 0);
+	}
+}
+
+void tTVPApplication::RequestUpdate()
+{
+	// 全ウインドウの表示更新要請
+    for (auto it = windows_.begin();it != windows_.end();it++) {
+		(*it)->SendMessage(AM_REQUEST_UPDATE, 0, 0);
 	}
 }
 
@@ -329,7 +330,9 @@ tTVPApplication::Dispatch()
 		UpdateVideoOverlay();
 
 		// 吉里吉里イベント配信実行
-		DeliverEvents();
+		if(!TVPSystemUninitCalled) {
+			DeliverEvents();
+		}
 
 	} catch( const EAbort & ) {
 		// nothing to do
@@ -346,17 +349,20 @@ tTVPApplication::Dispatch()
 		if(!TVPSystemUninitCalled)
 			ShowException( e.GetMessage().c_str() );
 	} catch( const std::exception &e ) {
-		ShowException( ttstr(e.what()).c_str() );
+		if(!TVPSystemUninitCalled)
+			ShowException( ttstr(e.what()).c_str() );
 	} catch( const char* e ) {
-		ShowException( ttstr(e).c_str() );
+		if(!TVPSystemUninitCalled)
+			ShowException( ttstr(e).c_str() );
 	} catch( const tjs_char* e ) {
-		ShowException( e );
+		if(!TVPSystemUninitCalled)
+			ShowException( e );
 	} catch(...) {
-		ShowException( (const tjs_char*)TVPUnknownError );
+		if(!TVPSystemUninitCalled)
+			ShowException( (const tjs_char*)TVPUnknownError );
 	}
 
 }
-
 
 void tTVPApplication::UpdateVideoOverlay() 
 {
@@ -404,7 +410,7 @@ void tTVPApplication::SendMessage( void *window, tjs_int message, tjs_int64 wpar
 	}
 }
 
-void tTVPApplication::SendTouchMessage( void *window, tjs_int type, float x, float y, float c, int id, tjs_int64 tick )
+void tTVPApplication::SendTouchMessage( void *window, tjs_int type, float x, float y, float c, int id, tjs_uint64 tick )
 {
 	// ウインドウにメッセージを送る
 	for (auto it = windows_.begin();it != windows_.end();it++) {
@@ -469,9 +475,9 @@ bool tTVPApplication::CacheIsLoading(bool fast) const
 
 // DrawDevice実装を返す
 tTJSNativeClass* 
-tTVPApplication::CreateDrawDevice()
+tTVPApplication::GetDefaultDrawDevice()
 {
-    return new tTJSNC_NullDrawDevice();
+	return new tTJSNC_NullDrawDevice();
 }
 
 class BasicAllocator : public iTVPMemoryAllocator
@@ -525,153 +531,3 @@ void tTVPApplication::DeliverEvents() {
 
 	TVPDeliverAllEvents();
 }
-
-// ----------------------------------------------------------------------
-// リソース処理
-// ----------------------------------------------------------------------
-
-/**
- * @brief リソースの読み出し
- * resource exePath のリソースフォルダにあるファイルを返す形で実装
- */
-std::shared_ptr<char> 
-tTVPApplication::ReadResource(const tjs_char *resourceName, tjs_uint64 *flen)
-{
-    tjs_string path = ResourcePath();
-    path += resourceName;
-
-	// ファイルがない場合
-	if (::TVPGetPlacedPath(path) == "") {
-		return 0;
-	}
-
-	std::unique_ptr<iTJSBinaryStream> stream(::TVPCreateStream(path.c_str(), TJS_BS_READ));
-	if (stream) {
-		size_t size = stream->GetSize();
-		if (size > 0) {
-			char* data = new char[size + 2];
-			size_t s = size;
-			char *p = data;
-			while (s > 0) {
-				size_t read = stream->Read(p, s);
-				if (read == 0) {
-					break;
-				}
-				s -= read;
-				p += read;
-			}
-			// 文字列として参照できるように末尾に0設定しておく
-			data[size] = '\0';
-			data[size+1] = '\0';
-			// 正規のサイズを返す
-			if (flen) {
-				*flen = size;
-			}
-			return std::shared_ptr<char>(data, std::default_delete<char[]>());
-		}
-	}
-    return 0;
-}
-
-/**
- * @brief リソースがあるかどうかの判定
- * 
- * @param resourceName 
- * @return true 
- * @return false 
- */
-bool 
-tTVPApplication::isExistentResoruce(const tjs_char *resourceName)
-{
-    tjs_string path = ResourcePath();
-    path += resourceName;
-    return TVPCheckExistentLocalFile(path.c_str());
-}
-
-
-static std::vector<std::string>* 
-loadLinesFromString(const char *str)
-{
-	if (str) {
-		std::vector<std::string>* ret = new std::vector<std::string>();
-		if (ret) {
-			std::istringstream istr(str);	
-			std::string line;
-			while (std::getline(istr, line)){
-				ret->push_back(line);
-			}
-			return ret;
-		}
-	}
-	return nullptr;
-}
-
-std::vector<std::string>* 
-tTVPApplication::loadLinesFromFile(const tjs_char *path)
-{
-	// ファイルがない場合
-	if (::TVPGetPlacedPath(path) == "") {
-		return 0;
-	}
-
-	std::unique_ptr<iTJSBinaryStream> stream(::TVPCreateStream(path, TJS_BS_READ));
-	if (stream) {
-		size_t size = stream->GetSize();
-		if (size > 0) {
-			std::unique_ptr<char[]> tmp(new char[size+2]);
-			char *ptr = tmp.get();
-			if (ptr) {
-				stream->Read(ptr, size);
-				// 文字列として参照できるように末尾に0設定しておく
-				ptr[size] = '\0';
-				ptr[size+1] = '\0';
-				return loadLinesFromString(ptr);
-			}
-		}
-	}
-	return 0;
-}
-
-std::vector<std::string>* 
-tTVPApplication::loadLinesFromResource(const tjs_char *resourceName)
-{
-	auto buf = ReadResource(resourceName, nullptr);
-	return loadLinesFromString(buf.get());
-}
-
-
-// ------------------------------------------------------------
-
-int
-tTVPApplication::PRINTF( const tjs_char* fmt, ...)
-{
-	size_t len;
-	va_list ap;
-	va_start( ap, fmt );
-	len = TJS_vsnprintf( NULL, 0, fmt, ap ) + 1;
-	va_end( ap );
-	std::unique_ptr<tjs_char[]> tmp(new tjs_char[len]);
-	va_start( ap, fmt );
-	len = TJS_vsnprintf( tmp.get(), len, fmt, ap );
-	va_end( ap );
-	PrintConsole(tmp.get(), len, false);
-	return len;
-}
-
-int
-tTVPApplication::DPRINTF( const tjs_char* fmt, ...)
-{
-	size_t len;
-	va_list ap;
-	va_start( ap, fmt );
-	len = TJS_vsnprintf( NULL, 0, fmt, ap );
-	va_end( ap );
-	std::unique_ptr<tjs_char[]> tmp(new tjs_char[len+1]);
-	va_start( ap, fmt );
-	len = TJS_vsnprintf( tmp.get(), len, fmt, ap );
-	va_end( ap );
-	tmp[len] = '\0';
-	PrintConsole(tmp.get(), len, true);
-	return len;
-}
-

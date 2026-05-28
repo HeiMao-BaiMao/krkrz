@@ -14,37 +14,71 @@
 	#error Sorry, currently tp_stub.h can only be used in C++ mode.
 #endif
 
+#ifdef _WIN32
+#define STDCALL __stdcall
+#else
 #define STDCALL
-#define DLL_EXPORT
+#endif
+
 #include <string>
 #include <stdarg.h>
 
 
-#if defined(_WIN32)  && !defined(__GNUC__)
-
-/* VC++/BCC */
-
-typedef __int8 tjs_int8;
-typedef unsigned __int8 tjs_uint8;
-typedef __int16 tjs_int16;
-typedef unsigned __int16 tjs_uint16;
-typedef __int32 tjs_int32;
-typedef unsigned __int32 tjs_uint32;
-typedef __int64 tjs_int64;
-typedef unsigned __int64 tjs_uint64;
-typedef int tjs_int;    /* at least 32bits */
-typedef unsigned int tjs_uint;    /* at least 32bits */
-
-#ifdef __cplusplus
-//typedef char16_t tjs_char;
-typedef wchar_t tjs_char;
-typedef std::wstring tjs_string;
-#else
-typedef unsigned short tjs_char;
-#endif
+typedef int8_t tjs_int8;
+typedef uint8_t tjs_uint8;
+typedef int16_t tjs_int16;
+typedef uint16_t tjs_uint16;
+typedef int32_t tjs_int32;
+typedef uint32_t tjs_uint32;
+typedef int64_t tjs_int64;
+typedef uint64_t tjs_uint64;
 
 typedef char tjs_nchar;
 typedef double tjs_real;
+
+typedef int tjs_int;
+typedef unsigned int tjs_uint;
+
+typedef intptr_t tjs_intptr_t;
+typedef uintptr_t tjs_uintptr_t;
+
+
+#if !defined(_WIN32)
+typedef struct tagBITMAPINFOHEADER{
+    uint32_t      biSize;
+    int32_t       biWidth;
+    int32_t       biHeight;
+    uint16_t       biPlanes;
+    uint16_t       biBitCount;
+    uint32_t      biCompression;
+    uint32_t      biSizeImage;
+    int32_t       biXPelsPerMeter;
+    int32_t       biYPelsPerMeter;
+    uint32_t      biClrUsed;
+    uint32_t      biClrImportant;
+} BITMAPINFOHEADER, *PBITMAPINFOHEADER;
+
+typedef struct tagRGBQUAD {
+	uint8_t    rgbBlue;
+	uint8_t    rgbGreen;
+	uint8_t    rgbRed;
+	uint8_t    rgbReserved;
+} RGBQUAD;
+
+typedef struct tagBITMAPINFO {
+    BITMAPINFOHEADER    bmiHeader;
+    RGBQUAD             bmiColors[1];
+} BITMAPINFO, *PBITMAPINFO;
+
+typedef int32_t HRESULT;
+#define S_OK 0
+#define E_FAIL 0x80004005
+#endif
+
+
+#if defined(_WIN32)  && !defined(__GNUC__)
+
+#warning "use Windows MSVC tp_stub.h"
 
 #define TJS_HOST_IS_BIG_ENDIAN 0
 #define TJS_HOST_IS_LITTLE_ENDIAN 1
@@ -64,12 +98,6 @@ typedef double tjs_real;
 #define TJS_64BIT_OS	/* 64bit windows */
 #endif
 
-typedef intptr_t tjs_intptr_t;
-typedef uintptr_t tjs_uintptr_t;
-
-#define TJS_W(X) L##X
-
-
 #else
 
 /* gcc ? */
@@ -82,45 +110,7 @@ typedef uintptr_t tjs_uintptr_t;
  #error "-DHAVE_CONFIG_H and config.h required."
 #endif
 */
-#include <sys/types.h>
-#include <stdint.h>
 
-
-#if defined(__linux__)
-	typedef int8_t tjs_int8;
-	typedef u_int8_t tjs_uint8;
-	typedef int16_t tjs_int16;
-	typedef u_int16_t tjs_uint16;
-	typedef int32_t tjs_int32;
-	typedef u_int32_t tjs_uint32;
-	typedef int64_t tjs_int64;
-	typedef u_int64_t tjs_uint64;
-#elif defined(__GNUC__)
-	typedef int8_t tjs_int8;
-	typedef uint8_t tjs_uint8;
-	typedef int16_t tjs_int16;
-	typedef uint16_t tjs_uint16;
-	typedef int32_t tjs_int32;
-	typedef uint32_t tjs_uint32;
-	typedef int64_t tjs_int64;
-	typedef uint64_t tjs_uint64;
-#endif
-
-#ifdef __cplusplus
-typedef char16_t tjs_char;
-typedef std::u16string tjs_string;
-#else
-typedef unsigned short tjs_char;
-#endif
-
-typedef char tjs_nchar;
-typedef double tjs_real;
-
-typedef int tjs_int;
-typedef unsigned int tjs_uint;
-
-typedef intptr_t tjs_intptr_t;
-typedef uintptr_t tjs_uintptr_t;
 
 #define TJS_I64_VAL(x) ((tjs_int64)(x##LL))
 #define TJS_UI64_VAL(x) ((tjs_uint64)(x##LL))
@@ -136,8 +126,6 @@ typedef uintptr_t tjs_uintptr_t;
 #define TJS_INTF_METHOD
 #define TJS_USERENTRY
 
-#define TJS_W(X) u##X
-
 #endif /* end of defined(_WIN32) && !defined(__GNUC__) */
 
 #define _TJS_W(str)     TJS_W(str)
@@ -146,6 +134,30 @@ typedef uintptr_t tjs_uintptr_t;
 
 
 #define TJS_N(X) X
+
+#ifdef __WINVER__
+
+#ifdef __cplusplus
+typedef wchar_t tjs_char;
+typedef std::wstring tjs_string;
+#else
+typedef tjs_uint16 tjs_char;
+#endif
+
+#define TJS_W(X) L##X
+
+#else
+
+#ifdef __cplusplus
+typedef char16_t tjs_char;
+typedef std::u16string tjs_string;
+#else
+typedef tjs_uint16 tjs_char;
+#endif
+
+#define TJS_W(X) u##X
+
+#endif
 
 
 typedef tjs_int32 tjs_error;
@@ -964,6 +976,8 @@ public:
 		return Seek(0, SEEK_CUR);
 	};
 };
+/** for tp_stub compatibility */
+typedef iTJSBinaryStream tTJSBinaryStream;
 
 
 
